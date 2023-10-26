@@ -49,8 +49,11 @@ class App{
                         this.coffin.animate();
                     }else if (this.gate){
                         this.gate.openGate();
+                    }else if (this.grail){
+                        this.grail.find();
                     }
                     break;
+
             }
           }, false);
 
@@ -86,8 +89,7 @@ class App{
                 this.scene.add(this.gate);
                 break;
             case 'grail':
-                this.grail = new Grail();
-                this.scene.add(this.grail);
+                this.grail = new Grail(this.scene);
                 break;
         }
     } 
@@ -98,7 +100,7 @@ class App{
         this.renderer.setSize( window.innerWidth, window.innerHeight );  
     }
     
-	render( ) {  
+	render( time ) {  
         const dt = this.clock.getDelta();
         if (this.shield){
             this.shield.rotateY(0.01);
@@ -108,6 +110,8 @@ class App{
             this.coffin.update(dt);
         }else if(this.gate){
             this.gate.update(dt);
+        }else if (this.grail){
+            this.grail.update(time, dt);
         }
         this.renderer.render( this.scene, this.camera );
     }

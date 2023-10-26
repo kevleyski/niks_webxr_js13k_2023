@@ -7,11 +7,13 @@ import { Tree, Rock, RockFace, Tower, Shield, Heart, Grail, Gate } from './Model
 import { Player } from './Player.js';
 import { Enemy  } from './Enemy.js';
 import { DebugControls } from './DebugControls.js';
-//import ballSfx from "../assets/ball1.mp3";
+import ballSfx from "../assets/ball1.mp3";
 
 class App{
+    static STATES = { IDLE: 0, PLAYING: 1, PAUSED: 2, DEAD: 3, COMPLETE: 4 };
+
 	constructor(){
-        const debug = true;
+        const debug = false;
 
 		const container = document.createElement( 'div' );
 		document.body.appendChild( container );
@@ -22,22 +24,21 @@ class App{
 
 		this.camera.position.set( 5.3, 10.5, 20 );
         this.camera.quaternion.set( -0.231, 0.126, 0.03, 0.964);
-
-        //this.createUI();
         
 		this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color( 0x050505 );
 
-		this.scene.add( new THREE.HemisphereLight( 0xffffff, 0x404040, 0.45 ) );
+		this.scene.add( new THREE.HemisphereLight( 0xffffff, 0x404040, 1.5) );
 			
 		this.renderer = new THREE.WebGLRenderer({ antialias: true } );
 		this.renderer.setPixelRatio( window.devicePixelRatio );
 		this.renderer.setSize( window.innerWidth, window.innerHeight );
-       // this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+       const light = new THREE.DirectionalLight(0xFFFFFF, 2);
+       light.position.set(1,3,3);
+       this.scene.add(light);
         
 		container.appendChild( this.renderer.domElement );
-
-        this.tweens = [];
         
         this.initScene();
         this.initPhysics();
@@ -45,6 +46,7 @@ class App{
         this.tmpVec = new THREE.Vector3();
         this.tmpEuler = new THREE.Euler();
         this.tmpMat4 = new THREE.Matrix4();
+        this.raycaster = new THREE.Raycaster();
 
         this.force = new THREE.Vector3();
         this.speed = 3;
@@ -63,8 +65,31 @@ class App{
 	}	
 
     startGame(){
-        this.state = 'game';
-        //this.sfx.click.play();
+        this.state = App.STATES.PLAYING;
+        this.gameTime = 0;
+        this.startTime = this.clock.elapsedTime;
+        const panel = document.getElementById('openingPanel');
+        panel.style.display = 'none';
+        this.sfx.ball.play();
+    }
+
+    gameOver(options){
+        if (options){
+            const panel = document.getElementById('gameoverPanel');
+            const details = document.getElementById('details');
+            switch( options.state ){
+                case App.STATES.DEAD:
+                    details.innerHTML = `<P>You ran out of life ${this.player.position.distanceTo(this.grail.position).toFixed(0)} metres away from the Holy Grail</p>`
+                    break;
+                case App.STATES.COMPLETE:
+                    const tm = this.clock.elapsedTime - this.startTime;
+                    details.innerHTML = `<p>Congratulations</p><p>You found the grail in ${tm.toFixed(2)} seconds</p><p>Can you do better</p>`;
+                    break;
+            }
+            panel.style.display = 'block';
+        }
+       
+        this.vrButton.endSession();
     }
 
     random( min, max ){
@@ -77,7 +102,7 @@ class App{
 		this.scene.fog = new THREE.Fog( 0x0a0a0a, 50, 100 );
 
 		// ground
-		const ground = new THREE.Mesh( new THREE.PlaneGeometry( 100, 1000 ), new THREE.MeshPhongMaterial( { color: 0x999999, depthWrite: true } ) );
+		const ground = new THREE.Mesh( new THREE.PlaneGeometry( 100, 1000 ), new THREE.MeshPhongMaterial( { color: 0x998866, depthWrite: true } ) );
 		ground.rotation.x = - Math.PI / 2;
 		this.scene.add( ground );
         ground.position.z = -400;
@@ -87,11 +112,10 @@ class App{
         this.camera.add( listener );
 
         this.sfx = {};
-        //this.sfx.ball = this.loadSound(ballSfx, listener, 0.1);
+        this.sfx.ball = this.loadSound(ballSfx, listener, 0.1);
 
         let z = 40;
         const width = 12;
-        const maxTreeType = 2;
         const offset = new THREE.Vector3();
         const rock = new Rock();
         const tree = new Tree();
@@ -150,13 +174,18 @@ class App{
     createPlayer(){
         const player = new Player( this.scene, this.world );
         player.root.position.set( 0, 0.5, 10 );
-        const body = new SPBody( player.root, new SPSphereCollider(0.5), 1 ); 
-        body.mesh.userData.knight = player;
+        const body = new SPBody( player.root, new SPSphereCollider(0.8), 1 ); 
+        body.mesh.userData.player = player;
         body.mesh.name = 'Player';
+        player.app = this;
         this.knight = player;
         this.knight.body = body;
         this.world.addBody( body );
+        player.startPosition.copy(player.root.position);
         player.game = this;
+        this.follower = new THREE.Object3D();
+        this.follower.position.set(0, 5, 8);
+        body.mesh.add(this.follower);
 
         return body;
     }
@@ -164,10 +193,12 @@ class App{
     createEnemy(pos, z){
         const enemy = new Enemy( this.scene, z, this.world );
         enemy.root.position.copy( pos );
-        const body = new SPBody( enemy.root, new SPSphereCollider(0.5), 1 ); 
-        body.mesh.userData.knight = enemy;
+        const body = new SPBody( enemy.root, new SPSphereCollider(0.8), 1 ); 
+        body.mesh.userData.enemy = enemy;
         body.mesh.name = 'Enemy';
         enemy.body = body;
+        enemy.startPosition.copy(pos);
+        enemy.orgZ = z;
         this.enemies.push(enemy);
         this.world.addBody( body );
         enemy.startPatrol();
@@ -201,7 +232,7 @@ class App{
             buildWall(positions, objects);
             const gate = new Gate( 1.5, 5 );
             pos.set( 0, 0, z);
-            createAABB(pos, gate);
+            gate.body = createAABB(pos, gate);
             self.gates.push(gate);
         }
 
@@ -211,7 +242,7 @@ class App{
             buildWall(positions, objects);
             const gate = new Gate( 1.375, 4.5 );
             pos.set( -2.75, 0, z);
-            createAABB(pos, gate);
+            gate.body = createAABB(pos, gate);
             self.scene.add(gate);
             self.gates.push(gate);
         }
@@ -222,7 +253,7 @@ class App{
             buildWall(positions, objects);
             const gate = new Gate( 1.375, 4.5 );
             pos.set( 2.75, 0, z );
-            createAABB(pos, gate);
+            gate.body = createAABB(pos, gate);
             self.gates.push(gate);
         }
 
@@ -286,22 +317,39 @@ class App{
             if (Math.random()>0.3){
                 this.createEnemy(pos.set(this.random(-8, 8), 0.5, z-10+this.random(-5, 5)), z-10);
             }
-            if (z == -20){
-                this.grail = new Grail();
+            if (z == -400){
+                this.grail = new Grail(this.scene);
                 this.grail.position.set(0,0,z-10);
                 this.scene.add(this.grail);
+                const max = new THREE.Vector3( 1.5, 3, 1.5 ).multiplyScalar(0.5);
+                const min = max.clone().multiplyScalar(-1);
+
+                const body = new SPBody( this.grail, new SPAABBCollider(min,  max)); 
+    
+                this.world.addBody( body );
             }
         }
 
         this.collectables.forEach( collectable => { this.scene.add(collectable) } );
 
         this.player = this.createPlayer();
-        //this.player.sfx = this.sfx.ball;
-        this.player.onCollision = () => {
+        this.player.sfx = this.sfx.ball;
+        this.player.onCollision = (type) => {
             const pos = this.player.position.clone();
-            pos.y += 0.7
+            pos.y += 0.7;
             this.effect.reset( pos );
-            this.player.life -= 0.1;
+            this.knight.hit(0.05);
+            if (type == 'Gate'){
+                this.knight.rotateOnMove = false;
+                this.knight.skipAttack = true;
+                setTimeout( () => {
+                    this.knight.rotateOnMove = true;
+                    this.knight.skipAttack = false;
+                }, 1000);
+            }
+            if (this.knight.life<=0){
+                this.gameOver( { state: App.STATES.DEAD })
+            }
         }
         this.fixedStep = 1/60;
         this.effect = new CollisionEffect(this.scene, false);
@@ -323,12 +371,29 @@ class App{
         }
     }
 
+    resetGame(){
+        this.dolly.position.z = 10;
+        this.camera.position.set( 5.3, 10.5, 20 );
+        this.camera.quaternion.set( -0.231, 0.126, 0.03, 0.964);
+        this.camera.fov = 50;
+        this.knight.reset();
+        this.force.set(0,0,0);
+        this.resize();
+
+        this.enemies.forEach( enemy => enemy.reset() );
+        this.collectables.forEach( collectable => collectable.visible = true );
+        this.grail.reset();
+        this.gates.forEach( gate => gate.reset() );
+    }
+
     setupVR(){
         this.renderer.xr.enabled = true;
         
         const button = new VRButton( this.renderer );
+        this.vrButton = button;
+
         button.onClick = () => {
-            //this.sfx.ball.play();
+            this.sfx.ball.play();
         }
         
         function onSelectStart() {
@@ -339,38 +404,22 @@ class App{
             scope.knight.stopAnims();    
         }
 
-        function onSqueezeStart() {
-            scope.knight.playAnim('switchaction');  
+       /* function onSqueezeStart() {
+            //scope.knight.playAnim('switchaction');  
         }
 
         function onSqueezeEnd() {
             scope.knight.stopAnims();    
-        }
+        }*/
 
         const scope = this;
 
         this.renderer.xr.addEventListener( 'sessionend', function ( event ) {
-            scope.dolly.position.z = 10;
-            scope.camera.position.set( 5.3, 10.5, 20 );
-            scope.camera.quaternion.set( -0.231, 0.126, 0.03, 0.964);
-            scope.camera.fov = 50;
-            scope.player.position.set( 0, 0.5, 10);
-            scope.player.velocity.set(0,0,0);
-            scope.force.set(0,0,0);
-            scope.resize();
-            //scope.scoreUI.visible = false;
-            //scope.livesUI.visible = false;
+            scope.resetGame();
         } );
 
         this.renderer.xr.addEventListener( 'sessionstart', function ( event ) {
-            scope.state = 'game';
-            scope.startTime = scope.clock.elapsedTime;
-            scope.timerInterval = setInterval( scope.updateTime.bind(scope), 1000 );
-            //scope.lives = 5;
-            //scope.livesUI.showLives( scope.lives );
-            
-            //scope.scoreUI.visible = true;
-            //scope.livesUI.visible = true;
+            scope.startGame();
         } );
         
 
@@ -385,15 +434,15 @@ class App{
             const controller = this.renderer.xr.getController( i );
             controller.addEventListener( 'selectstart', onSelectStart );
             controller.addEventListener( 'selectend', onSelectEnd );
-            controller.addEventListener( 'squeezestart', onSqueezeStart );
-            controller.addEventListener( 'squeezeend', onSqueezeEnd );
+            //controller.addEventListener( 'squeezestart', onSqueezeStart );
+            //controller.addEventListener( 'squeezeend', onSqueezeEnd );
             controller.addEventListener( 'connected', ( event ) => {
                 const mesh = this.buildController(event.data, i);
                 mesh.scale.z = 0;
                 controller.add( mesh );
                 controller.gamepad = event.data.gamepad;
                 controller.handedness = event.data.handedness;
-                console.log(`controller connected ${controller.handedness}`);
+                //console.log(`controller connected ${controller.handedness}`);
             } );
             
             controller.addEventListener( 'disconnected', function () {
@@ -403,57 +452,32 @@ class App{
                     this.remove( grip );
                 }
                 scope.dolly.remove(this);
-                //this.remove( this.children[ 0 ] );
             } );
 
             this.root.add( controller );
 
-            const grip = this.renderer.xr.getControllerGrip( i );
+            /*const grip = this.renderer.xr.getControllerGrip( i );
             grip.add( this.buildGrip( ) );
-            controller.add( grip );
+            controller.add( grip );*/
 
-            this.controllers.push({controller, grip});
+            this.controllers.push({controller});// grip});
         }
         
         this.dolly.position.set(0, 8, 10);
         this.dolly.add( this.camera );
         this.scene.add( this.dolly );
-        //this.camera.remove( this.scoreUI.mesh );
-        //this.scoreUI.mesh.position.set(1, 2, -3 );
-        //this.camera.remove( this.livesUI.mesh );
-        //this.livesUI.mesh.position.set(-1, 2, -3 );
-        //this.dolly.add( this.scoreUI.mesh );
-        //this.dolly.add( this.livesUI.mesh )
         
         this.dummyCam = new THREE.Object3D();
         this.camera.add( this.dummyCam );
 
     }
-
-    updateTime(){
-        const tm = 100 - Math.floor(this.clock.elapsedTime - this.startTime);
-        if (tm<0 && this.renderer.xr.getSession()){
-            this.renderer.xr.getSession().end();
-            clearInterval(this.timerInterval);
-            return;
-        }
-        const mins = Math.floor(tm/60);
-        const secs = tm - mins*60;
-        let minsStr = String(mins);
-        while (minsStr.length<2) minsStr = '0' + minsStr;
-        let secsStr = String(secs);
-        while (secsStr.length<2) secsStr = '0' + secsStr;
-        const str = minsStr + ':' + secsStr;
-        //this.scoreUI.clear( { x:120, w:136 } );
-        //this.scoreUI.showText( 120, 30, str, false);
-    }
     
-    buildGrip(){
+    /*buildGrip(){
         const geometry = new THREE.CylinderGeometry(0.02, 0.015, 0.12, 16, 1);
         geometry.rotateX( -Math.PI/2 );
         const material = new THREE.MeshStandardMaterial( { color: 0xdddddd, roughness: 1 } );
         return new THREE.Mesh(geometry, material);
-    }
+    }*/
 
     buildController( data ) {
         let geometry, material;
@@ -483,12 +507,15 @@ class App{
     handleController( controller, dt ){
         if (controller.handedness == 'right'){
             this.force.set( controller.gamepad.axes[2], 0, controller.gamepad.axes[3] );
-            console.log(`handleController: ${controller.gamepad.axes[2].toFixed(2)},  ${controller.gamepad.axes[3].toFixed(2)}`);
+            //console.log(`handleController: ${controller.gamepad.axes[2].toFixed(2)},  ${controller.gamepad.axes[3].toFixed(2)}`);
+        }else if (controller.handedness == 'left'){
+            this.knight.rotateStrength = -controller.gamepad.axes[2];
         }
     }
 
-	render( time ) {  
+	render( time, frame ) {  
         const dt = this.clock.getDelta();
+
         if (this.world){
             this.player.velocity.add( this.force.clone().multiplyScalar(dt * this.speed) );
 
@@ -496,6 +523,8 @@ class App{
         }
 
         if (this.renderer.xr.isPresenting){
+            this.gameTime += dt;
+
             if (this.debugControls==undefined){
                 if (this.useHeadsetOrientation){
                     this.tmpMat4.extractRotation( this.dummyCam.matrixWorld );
@@ -505,24 +534,33 @@ class App{
                     this.controllers.forEach( (obj) => this.handleController(obj.controller));
                 }
             }
-            this.dolly.position.z = this.player.position.z + 10;
+            //this.dolly.position.z = this.player.position.z + 10;
+            this.follower.getWorldPosition(this.tmpVec);
+            this.dolly.position.lerp(this.tmpVec, 0.1);
             
             if ( this.enemies ){
+                this.knight.underAttack = false;
                 this.enemies.forEach( enemy => {
-                    if (enemy.state == enemy.STATES.HONE){
+                    if (enemy.state == Enemy.STATES.DEAD){
+                        enemy.update(dt);
+                        return;
+                    }
+                    if (enemy.state == Enemy.STATES.HONE){
                         enemy.body.velocity.copy(enemy.root.position).sub(this.knight.root.position).normalize().multiplyScalar(this.speed*0.7).negate();
                     }
                     enemy.update(dt, enemy.body.velocity);
                     const dist = enemy.root.position.distanceTo(this.knight.root.position);
                     if (dist<2){
-                        if (!enemy.state == enemy.STATES.ATTACK){
-                            enemy.startAttack();
+                        if (enemy.state != Enemy.STATES.ATTACK){
+                            enemy.startAttack(this);
+                        }else{
+                            this.tmpVec.copy(this.player.position).sub(enemy.body.position);
+                            enemy.setDirection(this.tmpVec);
+                            this.knight.underAttack = true;
                         }
                     }else if (dist<10){
-                        if (!enemy.state == enemy.STATES.ATTACK){
-                            enemy.startHone();
-                        }
-                    }else if (!enemy.state == enemy.STATES.PATROL){
+                        enemy.startHone(this);
+                    }else if (enemy.state != Enemy.STATES.PATROL){
                         enemy.startPatrol();
                     }
                 })
@@ -540,17 +578,43 @@ class App{
         if ( this.effect && this.effect.visible ) this.effect.update(time, dt);
 
         if (this.collectables){
+            this.tmpVec.copy(this.player.position);
+            this.tmpVec.y -= 0.8;
+            //let closest = 100000;
             this.collectables.forEach( collectable => {
+                if (!collectable.visible) return;
                 collectable.rotateY(0.01);
-            })
+                const dist = collectable.position.distanceTo(this.tmpVec);
+                //if (dist < closest) closest = dist;
+                if (dist<0.5){
+                    if (collectable instanceof Shield){
+                        this.knight.makeInvincible(10);
+                    }else if (collectable instanceof Heart){
+                        this.knight.hit(-1);
+                    }
+                    collectable.visible = false;
+                }
+            });
+            //console.log(`Closest collectable is ${closest.toFixed(2)} away`);
         }
     
         if (this.gates){
             this.gates.forEach( gate => gate.update(dt) );
         }
+
+        if (this.grail){
+            const dist = this.player.position.distanceTo(this.grail.position);
+            //console.log('Distance to grail:' + dist.toFixed(2));
+            if (dist<2){
+                this.grail.find(this);
+            }
+            this.grail.update(time, dt);
+        }
        
         this.renderer.render( this.scene, this.camera );
     }
 }
+
+export { App };
 
 window.app = new App();  

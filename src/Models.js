@@ -59,6 +59,9 @@ f 8//21 7//21 5//21
 f 7//22 2//22 6//22
 `;*/
 
+import { CollisionEffect } from "./CollisionEffect.js";
+import { App } from "./index.js";
+
 class Tree extends THREE.Group{
     constructor(type=0){
         super();
@@ -149,7 +152,7 @@ class Rock extends THREE.Mesh{
 }
 
 class Grail extends THREE.Group{
-    constructor(){
+    constructor(scene){
         super();
         const points = [
             { x: 0.3, y: 0 },
@@ -184,6 +187,56 @@ class Grail extends THREE.Group{
         this.add(plinthColumn);
         this.add(plinthTop);
         this.add(this.grail);
+
+        const spot = new THREE.SpotLight(0xFFFFFF, 1, 5, Math.PI/6, 0.5);
+        spot.position.set(0, 3, 1);
+        spot.lookAt( this.grail.position );
+        this.add(spot);
+
+        const posTrack = new THREE.NumberKeyframeTrack( '.position[y]', [0, 0.5, 1.5], [1.5, 2, 2.2] );
+		const clip = new THREE.AnimationClip( null, 1.5, [ posTrack ] );
+        this.mixer = new THREE.AnimationMixer( this.grail );
+        this.action = this.mixer.clipAction(clip);
+        this.action.loop = THREE.LoopOnce;
+        this.action.clampWhenFinished = true;
+        this.mixer.addEventListener('finished', () => {
+            this.grail.visible = false;
+            if (this.app){
+                this.app.gameOver({ state:App.STATES.COMPLETE });
+            }
+        })
+
+        scene.add(this);
+
+        this.effect = new CollisionEffect(scene, false, { 
+            shape: CollisionEffect.STAR,
+            count: 20,
+            velocity: new THREE.Vector3(0,0.06,0),
+            radius: 1
+        })
+
+        this.found = false;
+    }
+
+    find(app){
+        if (this.found) return;
+        this.reset();
+        this.effect.reset(this.position);
+        this.action.play();
+        this.app = app;
+        this.found = true;
+    }
+
+    reset(){
+        this.grail.visible = true;
+        this.action.reset();
+    }
+
+    update(time, dt){
+        if (this.effect.visible){
+            this.effect.update(time, dt);
+        }
+        this.mixer.update(dt);
     }
 }
 
@@ -417,7 +470,7 @@ class Shield extends THREE.Mesh{
 }
 
 class Coffin extends THREE.Mesh{
-    constructor(){
+    constructor(enemy){
         const shape = new THREE.Shape();
 
         shape.moveTo( 0.4, 0);
@@ -449,11 +502,17 @@ class Coffin extends THREE.Mesh{
         const pos = new THREE.NumberKeyframeTrack( '.position[y]', config.times, config.pos );
         const fade = new THREE.NumberKeyframeTrack( '.material.opacity', config.times, config.fade );
 
-		const clip = new THREE.AnimationClip( 'animatete', config.duration, [ rot, pos, fade ] );
+		const clip = new THREE.AnimationClip( 'animate', config.duration, [ rot, pos, fade ] );
         this.mixer = new THREE.AnimationMixer(this);
         this.action = this.mixer.clipAction(clip);
         this.action.clampWhenFinished = true;
         this.action.loop = THREE.LoopOnce;
+
+        if (enemy){
+            this.mixer.addEventListener('finished', () => {
+                enemy.respawn();
+            });
+        }
     }
 
     animate(){
@@ -529,6 +588,13 @@ class Gate extends THREE.Group{
         this.openaction.loop = THREE.LoopOnce;
 
         this.strength = 20;
+    }
+
+    reset(){
+        this.openaction.reset();
+        this.openaction.stop();
+        this.strength = 20;
+        if (this.body) this.body.active = true;
     }
 
     hit(){

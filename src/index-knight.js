@@ -62,6 +62,9 @@ class App{
                 case 'ArrowRight':
                     this.workingVector.set(-1,1,0);
                     break;
+                case 'KeyL':
+                    this.knight.hit();
+                    break;
             }
           }, false);
 
@@ -97,5 +100,7 @@ class App{
         this.renderer.render( this.scene, this.camera );
     }
 }
+
+export { App };
 
 window.app = new App();  
